@@ -1,6 +1,6 @@
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import CallbackContext, ConversationHandler, MessageHandler, Filters
-from datetime import datetime
+from datetime import datetime, timedelta, date
 import sqlite3
 
 # Подключение к базе данных
@@ -43,10 +43,17 @@ def handle_vacation_start(update: Update, context: CallbackContext) -> int:
 
 # Обработка ввода даты начала отпуска
 def handle_vacation_end(update: Update, context: CallbackContext) -> int:
-    start_date = update.message.text
+    start_date_str = update.message.text
     try:
-        # Проверка корректности введенной даты
-        start_date = datetime.strptime(start_date, "%d.%m.%Y")
+        # Проверка формата даты
+        start_date = datetime.strptime(start_date_str, "%d.%m.%Y").date()
+        today = date.today()
+        
+        # Проверка что дата начала не в прошлом
+        if start_date < today:
+            update.message.reply_text("Дата начала отпуска не может быть раньше сегодняшнего дня. Введите корректную дату:")
+            return ENTER_VACATION_START
+            
         context.user_data['vacation_start'] = start_date
         update.message.reply_text("Введите дату окончания отпуска в формате ДД.ММ.ГГГГ:")
         return ENTER_VACATION_END
@@ -56,15 +63,30 @@ def handle_vacation_end(update: Update, context: CallbackContext) -> int:
 
 # Обработка ввода даты окончания отпуска
 def handle_vacation_confirmation(update: Update, context: CallbackContext) -> int:
-    end_date = update.message.text
+    end_date_str = update.message.text
     try:
-        end_date = datetime.strptime(end_date, "%d.%m.%Y")
+        end_date = datetime.strptime(end_date_str, "%d.%m.%Y").date()
         start_date = context.user_data['vacation_start']
+        today = date.today()
         
+        # Проверка что дата окончания позже даты начала
         if end_date <= start_date:
             update.message.reply_text("Дата окончания отпуска должна быть позже даты начала. Попробуйте снова.")
             return ENTER_VACATION_END
+            
+        # Проверка что отпуск не длится дольше 3 недель (21 день)
+        max_vacation_duration = timedelta(days=21)
+        actual_duration = (end_date - start_date).days
         
+        if actual_duration > 21:
+            update.message.reply_text(f"Отпуск не может длиться больше 3 недель (21 дня). Ваш отпуск: {actual_duration} дней. Введите корректную дату окончания:")
+            return ENTER_VACATION_END
+            
+        # Проверка что дата начала не в прошлом (на случай если пользователь долго вводил данные)
+        if start_date < today:
+            update.message.reply_text("Дата начала отпуска теперь в прошлом. Пожалуйста, начните процесс заново.")
+            return ConversationHandler.END
+            
         # Сохранение дат отпуска в базу данных
         tab_number = context.user_data.get('tab_number')
         if tab_number:
@@ -85,9 +107,6 @@ def save_vacation_dates(tab_number, start_date, end_date):
     ''', (tab_number, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
     conn.commit()
 
-# Обработка кнопки "Записать показания"
-def handle_metrics(update: Update, context: CallbackContext):
-    update.message.reply_text("Функция 'Записать показания' пока не реализована.")
 
 # Создание ConversationHandler для отпуска
 def get_vacation_conversation_handler():

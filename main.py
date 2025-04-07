@@ -2,7 +2,10 @@ import pandas as pd
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler, CallbackContext
 import sqlite3
+import pytz
+from datetime import time, timedelta
 from buttons_handler import handle_resignation, handle_metrics, get_vacation_conversation_handler
+from plan import weekly_reminder
 
 # Состояния для ConversationHandler
 ENTER_TAB_NUMBER, = range(1)
@@ -161,6 +164,29 @@ def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
 
+
+def update_db_from_excel():
+    try:
+        df = pd.read_excel('users.xlsx')
+        if not df.empty:
+            # Очистка таблицы перед обновлением
+            cursor.execute('DELETE FROM Users_user_bot')
+            # Вставка новых данных
+            for _, row in df.iterrows():
+                cursor.execute('''
+                INSERT INTO Users_user_bot (tab_number, name, role, t_number, is_on_shift)
+                VALUES (?, ?, ?, ?, ?)
+                ''', (row['tab_number'], row['name'], row['role'], row['t_number'], row['is_on_shift']))
+            conn.commit()
+            print("Данные в БД обновлены.")
+    except FileNotFoundError:
+        print("Файл users.xlsx не найден.")
+    except Exception as e:
+        print(f"Ошибка при обновлении БД: {e}")
+
+def daily_update(context: CallbackContext):
+    update_db_from_excel()
+
 def main():
     updater = Updater("7575482607:AAG9iLYAO2DFpjHVBDn3-m-tLicdNXBsyBQ")
     dispatcher = updater.dispatcher
@@ -173,13 +199,17 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
     )
 
-    # Добавляем ConversationHandler для отпуска
+    # Отпуск
     dispatcher.add_handler(get_vacation_conversation_handler())
 
     # Добавляем обработчики кнопок
     dispatcher.add_handler(MessageHandler(Filters.regex('^Я уволился$'), handle_resignation))
-    dispatcher.add_handler(MessageHandler(Filters.regex('^Записать показания$'), handle_metrics))
     dispatcher.add_handler(conv_handler)
+
+    job_queue = updater.job_queue
+    moscow_tz = pytz.timezone('Europe/Moscow')
+    job_queue.run_repeating(weekly_reminder, interval=timedelta(weeks=1), first=time(hour=8, minute=0, tzinfo=moscow_tz))
+
     updater.start_polling()
     updater.idle()
 
